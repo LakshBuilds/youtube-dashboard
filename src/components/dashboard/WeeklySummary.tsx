@@ -58,9 +58,10 @@ export default function WeeklySummary({ totalViews, totalVideos, totalLikes, tot
   const thisWeekStart = getWeekStart();
   const isAlreadySaved = latest?.week_start_date === thisWeekStart;
   const viewsGrowth = previous != null ? totalViews - previous.total_views : null;
-  const videosGrowth = previous != null ? totalVideos - ((previous as any).total_videos ?? 0) : null;
+  const videosGrowth = previous != null ? totalVideos - (previous.total_videos ?? 0) : null;
   const prevWeekViewsGrowth = previous && weekBefore ? previous.total_views - weekBefore.total_views : null;
-  const prevWeekVideosGrowth = previous && weekBefore ? ((previous as any).total_videos ?? 0) - ((weekBefore as any).total_videos ?? 0) : null;
+  const prevWeekVideosGrowth =
+    previous && weekBefore ? (previous.total_videos ?? 0) - (weekBefore.total_videos ?? 0) : null;
 
   return (
     <Card className="border-chart-4/20">
@@ -93,7 +94,7 @@ export default function WeeklySummary({ totalViews, totalVideos, totalLikes, tot
           <>
             <div className="text-sm text-muted-foreground">
               <span className="font-medium text-foreground">Previous week</span> (Week of {formatWeekLabel(previous.week_start_date)}):{" "}
-              {formatViews(previous.total_views)} views, {((previous as any).total_videos || 0).toLocaleString()} videos
+              {formatViews(previous.total_views)} views, {(previous.total_videos ?? 0).toLocaleString()} videos
             </div>
             {prevWeekViewsGrowth !== null && weekBefore && (
               <div className="rounded-lg border border-muted bg-muted/30 px-3 py-2 text-sm text-muted-foreground">

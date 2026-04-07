@@ -11,14 +11,17 @@ export interface WeeklySnapshotRow {
   created_at: string | null;
 }
 
-/** Get Monday 00:00:00 of the week for a given date (ISO date string) */
+/** Get Monday 00:00:00 local time of the week as YYYY-MM-DD (not UTC — avoids India/off-by-one bugs). */
 export function getWeekStart(date: Date = new Date()): string {
   const d = new Date(date);
   const day = d.getDay();
   const diff = d.getDate() - day + (day === 0 ? -6 : 1);
   d.setDate(diff);
   d.setHours(0, 0, 0, 0);
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dayNum = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dayNum}`;
 }
 
 /**
@@ -37,15 +40,15 @@ export async function saveWeeklySnapshot(stats: {
     const { error } = await supabase.from("weekly_snapshots").upsert(
       {
         week_start_date: weekStart,
-        total_views: stats.totalViews,
-        total_videos: stats.totalVideos,
-        total_likes: stats.totalLikes,
-        total_comments: stats.totalComments,
+        total_views: Math.round(stats.totalViews),
+        total_videos: Math.round(stats.totalVideos),
+        total_likes: Math.round(stats.totalLikes),
+        total_comments: Math.round(stats.totalComments),
         total_payout: stats.totalPayout,
       },
       { onConflict: "week_start_date" }
     );
-    if (error) return { success: false, error: error.message };
+    if (error) return { success: false, error: `${error.message}${error.code ? ` (${error.code})` : ""}` };
     return { success: true };
   } catch (e) {
     return { success: false, error: String(e) };
