@@ -37,18 +37,35 @@ export async function saveWeeklySnapshot(stats: {
 }): Promise<{ success: boolean; error?: string }> {
   try {
     const weekStart = getWeekStart();
-    const { error } = await supabase.from("weekly_snapshots").upsert(
-      {
-        week_start_date: weekStart,
-        total_views: Math.round(stats.totalViews),
-        total_videos: Math.round(stats.totalVideos),
-        total_likes: Math.round(stats.totalLikes),
-        total_comments: Math.round(stats.totalComments),
-        total_payout: stats.totalPayout,
-      },
-      { onConflict: "week_start_date" }
-    );
-    if (error) return { success: false, error: `${error.message}${error.code ? ` (${error.code})` : ""}` };
+    const payload = {
+      week_start_date: weekStart,
+      total_views: Math.round(stats.totalViews),
+      total_videos: Math.round(stats.totalVideos),
+      total_likes: Math.round(stats.totalLikes),
+      total_comments: Math.round(stats.totalComments),
+      total_payout: stats.totalPayout,
+    };
+
+    // Avoid upsert / ON CONFLICT — needs a UNIQUE on week_start_date; many DBs only have the table without it.
+    const { data: existing, error: selErr } = await supabase
+      .from("weekly_snapshots")
+      .select("id")
+      .eq("week_start_date", weekStart)
+      .limit(1)
+      .maybeSingle();
+
+    if (selErr) {
+      return { success: false, error: `${selErr.message}${selErr.code ? ` (${selErr.code})` : ""}` };
+    }
+
+    if (existing?.id) {
+      const { error } = await supabase.from("weekly_snapshots").update(payload).eq("id", existing.id);
+      if (error) return { success: false, error: `${error.message}${error.code ? ` (${error.code})` : ""}` };
+    } else {
+      const { error } = await supabase.from("weekly_snapshots").insert(payload);
+      if (error) return { success: false, error: `${error.message}${error.code ? ` (${error.code})` : ""}` };
+    }
+
     return { success: true };
   } catch (e) {
     return { success: false, error: String(e) };
