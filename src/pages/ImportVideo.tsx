@@ -11,48 +11,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, Upload, Link as LinkIcon, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { useUser } from "@clerk/clerk-react";
-
-const API_BASE = "https://youtube-scrapper-api.onrender.com";
-
-function extractYouTubeVideoId(url: string): string | null {
-  const patterns = [
-    /(?:youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
-    /(?:youtu\.be\/)([a-zA-Z0-9_-]{11})/,
-    /(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
-    /(?:youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
-    /(?:youtube\.com\/v\/)([a-zA-Z0-9_-]{11})/,
-  ];
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match) return match[1];
-  }
-  return null;
-}
-
-async function fetchVideoData(url: string): Promise<Record<string, any> | null> {
-  try {
-    const res = await fetch(`${API_BASE}/video?url=${encodeURIComponent(url)}`, {
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    return json?.data || json || null;
-  } catch {
-    return null;
-  }
-}
-
-function parseDurationToSeconds(duration: string | undefined | null): number | null {
-  if (!duration) return null;
-  const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-  if (!match) {
-    const parts = duration.split(":").map(Number);
-    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-    if (parts.length === 2) return parts[0] * 60 + parts[1];
-    return null;
-  }
-  return (Number(match[1] || 0) * 3600) + (Number(match[2] || 0) * 60) + Number(match[3] || 0);
-}
+import {
+  extractYouTubeVideoId,
+  fetchVideoData,
+  buildVideoMetadataFromApi,
+} from "@/lib/youtubeScraper";
 
 const ImportVideo = () => {
   const navigate = useNavigate();
@@ -70,7 +33,7 @@ const ImportVideo = () => {
     setLoading(false);
   }, [isLoaded, user, navigate]);
 
-  const saveVideo = async (videoId: string, url: string, apiData: Record<string, any> | null) => {
+  const saveVideo = async (videoId: string, url: string, apiData: Record<string, unknown> | null) => {
     if (!user) throw new Error("Not authenticated");
 
     const { data: existing } = await supabase
@@ -90,36 +53,18 @@ const ImportVideo = () => {
       fullName: user.fullName || "User",
     };
 
-    const record: Record<string, any> = {
+    const record: Record<string, unknown> = {
       video_id: videoId,
       video_url: url,
       created_by_user_id: userInfo.id,
       created_by_email: userInfo.email,
       created_by_name: userInfo.fullName,
-      is_short: apiData?.isShort ?? url.includes("/shorts/"),
     };
 
     if (apiData) {
-      const snippet = apiData.snippet || {};
-      const stats = apiData.statistics || {};
-      const content = apiData.contentDetails || {};
-      const channel = apiData.channel || {};
-      const thumbs = snippet.thumbnails || {};
-
-      record.title = snippet.title || apiData.title || null;
-      record.description = snippet.description || apiData.description || null;
-      record.channel_name = snippet.channelTitle || channel.title || null;
-      record.channel_id = snippet.channelId || channel.id || null;
-      record.thumbnail_url = thumbs.maxres?.url || thumbs.high?.url || thumbs.medium?.url || thumbs.default?.url || null;
-      record.view_count = Number(stats.viewCount) || null;
-      record.like_count = Number(stats.likeCount) || null;
-      record.comment_count = Number(stats.commentCount) || null;
-      record.subscriber_count = Number(channel.subscriberCount) || null;
-      record.duration_seconds = content.durationSeconds || parseDurationToSeconds(content.duration) || null;
-      record.published_at = snippet.publishedAt || null;
-      record.category = snippet.categoryId || null;
-      record.tags = snippet.tags?.length ? snippet.tags : null;
+      Object.assign(record, buildVideoMetadataFromApi(apiData, url));
     } else {
+      record.is_short = url.includes("/shorts/");
       record.title = `YouTube Video ${videoId}`;
     }
 
@@ -144,12 +89,12 @@ const ImportVideo = () => {
 
       const saved = await saveVideo(videoId, url, apiData);
       if (saved) {
-        toast.success(apiData ? `Imported: ${apiData.title || videoId}` : "Video imported (metadata pending)");
+        toast.success(apiData ? `Imported: ${(apiData as { title?: string }).title || videoId}` : "Video imported (metadata pending)");
         setSingleVideoUrl("");
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Import error:", error);
-      toast.error(`Failed: ${error.message}`);
+      toast.error(`Failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setImportingSingle(false);
     }

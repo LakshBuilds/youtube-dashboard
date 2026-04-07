@@ -7,10 +7,18 @@ import VideosTable from "@/components/dashboard/VideosTable";
 import ProgressTracker from "@/components/dashboard/ProgressTracker";
 import WeeklySummary from "@/components/dashboard/WeeklySummary";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2 } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { useUser } from "@clerk/clerk-react";
 import type { Video } from "@/lib/types";
+import {
+  buildVideoMetadataFromApi,
+  fetchVideoData,
+  resolveVideoUrl,
+  REFRESH_DELAY_MS,
+} from "@/lib/youtubeScraper";
 
 const PAGE_SIZE = 1000;
 
@@ -58,6 +66,8 @@ const Dashboard = () => {
   const [globalVideos, setGlobalVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
   const [, setActiveTab] = useState("your-videos");
+  const [teamRefreshMode, setTeamRefreshMode] = useState<"idle" | "zero" | "all">("idle");
+  const [teamRefreshProgress, setTeamRefreshProgress] = useState({ current: 0, total: 0 });
 
   const userEmail = user?.primaryEmailAddress?.emailAddress;
 
@@ -115,6 +125,78 @@ const Dashboard = () => {
 
   const refreshVideos = () => fetchVideos(userEmail || "");
 
+  const runTeamVideoRefresh = async (mode: "zero" | "all") => {
+    const withUrl = allVideos.filter((v) => resolveVideoUrl(v));
+    const targets =
+      mode === "zero"
+        ? withUrl.filter((v) => (Number(v.view_count) || 0) === 0)
+        : withUrl;
+
+    if (targets.length === 0) {
+      toast.info(
+        mode === "zero"
+          ? "No videos with 0 views (and a URL) to refresh."
+          : "No videos with a URL to refresh."
+      );
+      return;
+    }
+
+    setTeamRefreshMode(mode);
+    setTeamRefreshProgress({ current: 0, total: targets.length });
+    let ok = 0;
+    let fail = 0;
+
+    for (let i = 0; i < targets.length; i++) {
+      const video = targets[i];
+      const url = resolveVideoUrl(video)!;
+      setTeamRefreshProgress({ current: i + 1, total: targets.length });
+
+      const now = new Date().toISOString();
+      try {
+        const apiData = await fetchVideoData(url);
+        if (!apiData) {
+          await supabase
+            .from("videos")
+            .update({ refresh_failed: true, last_refresh_at: now })
+            .eq("id", video.id);
+          fail++;
+        } else {
+          const patch = buildVideoMetadataFromApi(apiData, url);
+          await supabase
+            .from("videos")
+            .update({ ...patch, refresh_failed: false, last_refresh_at: now })
+            .eq("id", video.id);
+          ok++;
+        }
+      } catch {
+        await supabase
+          .from("videos")
+          .update({ refresh_failed: true, last_refresh_at: now })
+          .eq("id", video.id);
+        fail++;
+      }
+
+      if (i < targets.length - 1) {
+        await new Promise((r) => setTimeout(r, REFRESH_DELAY_MS));
+      }
+    }
+
+    await refreshVideos();
+    setTeamRefreshMode("idle");
+    setTeamRefreshProgress({ current: 0, total: 0 });
+
+    if (fail === 0) {
+      toast.success(`Refreshed ${ok} video(s).`);
+    } else {
+      toast.warning(`Updated ${ok}, failed or no API data for ${fail}.`);
+    }
+  };
+
+  const teamRefreshing = teamRefreshMode !== "idle";
+  const zeroViewCount = allVideos.filter(
+    (v) => (Number(v.view_count) || 0) === 0 && resolveVideoUrl(v)
+  ).length;
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
@@ -141,6 +223,58 @@ const Dashboard = () => {
 
           <TabsContent value="team-videos" className="space-y-6">
             <ProgressTracker yourViews={yourStats.totalViews} teamViews={globalStats.totalViews} variant="team-videos" />
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">Refresh team videos</CardTitle>
+                <CardDescription>
+                  Re-fetch stats from the YouTube scraper API. Use for rows stuck at 0 views or to update everyone&apos;s numbers.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center">
+                <div className="flex flex-wrap gap-3">
+                  <Button
+                    type="button"
+                    variant="default"
+                    className="bg-gradient-youtube"
+                    disabled={teamRefreshing || zeroViewCount === 0}
+                    onClick={() => runTeamVideoRefresh("zero")}
+                  >
+                    {teamRefreshMode === "zero" ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Refreshing {teamRefreshProgress.current}/{teamRefreshProgress.total}…
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Refresh 0-view videos
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={teamRefreshing || allVideos.filter((v) => resolveVideoUrl(v)).length === 0}
+                    onClick={() => runTeamVideoRefresh("all")}
+                  >
+                    {teamRefreshMode === "all" ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Refreshing {teamRefreshProgress.current}/{teamRefreshProgress.total}…
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Refresh all videos
+                      </>
+                    )}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground sm:ml-auto">
+                  {zeroViewCount} with 0 views · {allVideos.filter((v) => resolveVideoUrl(v)).length} with URL
+                </p>
+              </CardContent>
+            </Card>
             <WeeklySummary totalViews={globalStats.totalViews} totalVideos={globalStats.totalVideos} totalLikes={globalStats.totalLikes} totalComments={globalStats.totalComments} totalPayout={globalStats.totalPayout} />
             <StatsCards totalVideos={allStats.totalVideos} totalLikes={allStats.totalLikes} totalComments={allStats.totalComments} totalViews={allStats.totalViews} totalPayout={allStats.totalPayout} />
             <VideosTable videos={allVideos} onUpdate={refreshVideos} />
